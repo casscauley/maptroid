@@ -9,10 +9,10 @@ asmr's extractor track item 08 (world assembly + ingestion).
 What it does
 ------------
 - get_or_create a World (by slug) — re-running OVERWRITES, idempotent.
-- get_or_create one Zone per ROM area (Crateria..Tourian, by area_idx).
-- get_or_create one Room per bundle room (by world + key), writing the
+- get_or_create one Zone per bundle `zones[]` entry, writing world bounds
+  straight from the bundle (the bundle is already normalized — extractor/25).
+- get_or_create one Room per bundle room (by world + key), writing
   asmr-owned fields into Room.data: zone.bounds, holes, geometry.inner.
-- normalize() each zone, then the world, so coordinates are zoned.
 
 What it deliberately does NOT do
 --------------------------------
@@ -29,13 +29,20 @@ What it deliberately does NOT do
   nothing to tile. Pyramid generation stays with maptroid's existing
   `scripts/2-process_sm.py` / `process_zone` path.
 
+Normalization
+-------------
+Per asmr extractor/25, the bundle's `zones[]` is already canonically
+normalized: every zone's `min(member.zone_xy) == (0, 0)`, every zone's
+`world_wh` equals its content extent, and the leftmost-topmost zone sits
+at `world_xy == (0, 0)`. So `Zone.normalize()` / `World.normalize()`
+would be structural no-ops here — we skip them entirely.
+
 Safety
 ------
 Defaults to world-slug `vanilla` (the bundle's own `world` field), i.e.
 a SCRATCH world — it does NOT touch the curated `super-metroid` world.
-This is the item-08 round-trip check: load into a scratch world, diff
-against the real one. Point `--world-slug super-metroid` at the real
-world only deliberately, and not before backlog item 20 is resolved.
+Point `--world-slug super-metroid` at the real world only deliberately,
+and not before backlog item 20 is resolved.
 
 Usage
 -----
@@ -52,32 +59,6 @@ from django.db import transaction
 from django.utils.text import slugify
 
 from maptroid.models import World, Zone, Room, Item
-
-# ROM area index -> maptroid zone name. Matches scripts/_new_world.py.
-AREA_ZONE_NAMES = [
-    'Crateria',      # 0
-    'Brinstar',      # 1
-    'Norfair',       # 2
-    'Wrecked Ship',  # 3
-    'Maridia',       # 4
-    'Tourian',       # 5
-]
-AREA_BASE_SLUGS = tuple(slugify(n) for n in AREA_ZONE_NAMES)
-
-
-def _load_arrangement(bundle_path):
-    """Read the sibling `<bundle>.arrangement.json`, or return None.
-
-    Sidecar spec: asmr/docs/backlog/extractor/22-arrangement-override-schema.md.
-    Authored by hand (or by asmr extractor/23-24's UI, once it lands) and
-    consumed here. asmr's build_bundle validates it on emit; we re-validate
-    keys we touch but tolerate missing pointers (logged, inert) since the
-    bundle's room set is the source of truth for which rooms exist.
-    """
-    arr_path = bundle_path.with_suffix('').with_suffix('.arrangement.json')
-    if not arr_path.exists():
-        return None
-    return json.loads(arr_path.read_text())
 
 
 class Command(BaseCommand):
@@ -100,21 +81,16 @@ class Command(BaseCommand):
         if not path.exists():
             raise CommandError(f'bundle not found: {path}')
         bundle = json.loads(path.read_text())
-        arrangement = _load_arrangement(path)
 
         slug = opts['world_slug'] or slugify(bundle['world'])
         name = opts['world_name'] or f'{bundle["world"]} (asmr import)'
         rooms = bundle.get('rooms') or []
+        zones = bundle.get('zones') or []
 
         self.stdout.write(
             f'bundle: {path}  world={bundle.get("world")!r}  '
-            f'rooms={len(rooms)}  extractor={bundle.get("extractor_version")}')
-        if arrangement is not None:
-            self.stdout.write(
-                f'arrangement: {len(arrangement.get("subzones") or [])} subzone(s), '
-                f'{len(arrangement.get("zone_world_bounds") or {})} zone bound(s), '
-                f'{len(arrangement.get("room_zone_assignments") or {})} room reassignment(s), '
-                f'{len(arrangement.get("room_zone_bounds") or {})} room bound(s)')
+            f'rooms={len(rooms)}  zones={len(zones)}  '
+            f'extractor={bundle.get("extractor_version")}')
         if slug == 'super-metroid':
             self.stdout.write(self.style.WARNING(
                 '  !! targeting the curated super-metroid world — '
@@ -122,7 +98,7 @@ class Command(BaseCommand):
 
         try:
             with transaction.atomic():
-                self._load(bundle, slug, name, rooms, arrangement)
+                self._load(bundle, slug, name, rooms, zones)
                 if opts['dry_run']:
                     self.stdout.write(self.style.WARNING('dry-run — rolling back.'))
                     transaction.set_rollback(True)
@@ -132,12 +108,11 @@ class Command(BaseCommand):
         if not opts['dry_run']:
             self.stdout.write(self.style.SUCCESS('done.'))
 
-    def _load(self, bundle, slug, name, rooms, arrangement):
+    def _load(self, bundle, slug, name, rooms, zones):
         world, created = World.objects.get_or_create(
             slug=slug, defaults={'name': name})
         # asmr-loaded worlds are full vanilla replicas — surface them in the
-        # world listing the same way the curated super-metroid world is. The
-        # original `hidden: True` came from an earlier scratch-only design.
+        # world listing the same way the curated super-metroid world is.
         if world.data.get('hidden'):
             world.data['hidden'] = False
             world.save()
@@ -145,105 +120,45 @@ class Command(BaseCommand):
             f'world: {"created" if created else "reusing"} '
             f'{world.name!r} (id={world.id}, slug={world.slug})')
 
-        arr = arrangement or {}
-        subzone_slugs = list(arr.get('subzones') or [])
-        zone_world_bounds = arr.get('zone_world_bounds') or {}
-        room_zone_assignments = {k.upper(): v
-                                 for k, v in (arr.get('room_zone_assignments') or {}).items()}
-        room_zone_bounds = {k.upper(): v
-                            for k, v in (arr.get('room_zone_bounds') or {}).items()}
+        rooms_by_ptr = {r['pointer'].upper(): r for r in rooms}
 
-        # Validate subzone slugs (asmr's build_bundle already does this on emit,
-        # but a sidecar can land here without having gone through that path).
-        for sz in subzone_slugs:
-            if '__' not in sz or sz.split('__', 1)[0] not in AREA_BASE_SLUGS:
-                raise CommandError(
-                    f'arrangement: subzone {sz!r} must be <area>__<suffix> '
-                    f'with <area> in {AREA_BASE_SLUGS}')
-        subzone_set = set(subzone_slugs)
-
-        # Group rooms by ROM area for default zone assignment.
-        by_area = {}
-        for rec in rooms:
-            by_area.setdefault(rec['area_idx'], []).append(rec)
-
-        # Track which zone slugs the arrangement explicitly positions —
-        # those skip normalize() (positions are authoritative).
-        overridden_zone_slugs = set(zone_world_bounds.keys())
-
-        # Create the six base area zones.
+        # One Zone per bundle zones[] entry. Bundle is pre-normalized
+        # (extractor/25) — world bounds and member zone_xy are authoritative.
         zone_by_slug = {}
-        zone_by_area = {}
-        for area_idx in sorted(by_area):
-            members = by_area[area_idx]
-            zname = (AREA_ZONE_NAMES[area_idx] if 0 <= area_idx < len(AREA_ZONE_NAMES)
-                     else f'area-{area_idx}')
-            zslug = slugify(zname)
+        member_zone_by_ptr = {}
+        member_xy_by_ptr = {}
+        for z in zones:
+            zslug = z['slug']
+            zname = (z['slug'].replace('-', ' ').title()
+                     if '__' not in z['slug'] else z['slug'])
             zone, zcreated = Zone.objects.get_or_create(
                 world=world, slug=zslug, defaults={'name': zname})
-            if zslug in zone_world_bounds:
-                zone.data['world'] = {'bounds': list(zone_world_bounds[zslug])}
-            else:
-                # Default behavior: top-left from min room xy; w/h via normalize().
-                zx = min(r['xy'][0] for r in members)
-                zy = min(r['xy'][1] for r in members)
-                zone.data['world'] = {'bounds': [zx, zy, 1, 1]}
+            wx, wy = z['world_xy']
+            ww, wh = z['world_wh']
+            zone.data['world'] = {'bounds': [wx, wy, ww, wh]}
             zone.save()
             zone_by_slug[zslug] = zone
-            zone_by_area[area_idx] = zone
+            for m in z['members']:
+                ptr = m['pointer'].upper()
+                member_zone_by_ptr[ptr] = zone
+                member_xy_by_ptr[ptr] = list(m['zone_xy'])
             self.stdout.write(
-                f'  zone {area_idx}: {"created" if zcreated else "reusing"} '
-                f'{zname!r}  {len(members)} rooms')
-
-        # Create subzones declared by the arrangement. These are positioned
-        # exclusively by zone_world_bounds (no default-from-members fallback
-        # — rooms are assigned individually, so a subzone with no
-        # zone_world_bounds entry has no defensible position).
-        for sz in subzone_slugs:
-            zname = sz  # display name = slug for synthesized subzones
-            zone, zcreated = Zone.objects.get_or_create(
-                world=world, slug=sz, defaults={'name': zname})
-            if sz in zone_world_bounds:
-                zone.data['world'] = {'bounds': list(zone_world_bounds[sz])}
-            elif not zone.data.get('world'):
-                # No override and no prior bounds — park at origin; world.normalize
-                # will at least keep it in-frame. Loud warning so the human knows
-                # to fill in zone_world_bounds[sz].
-                self.stdout.write(self.style.WARNING(
-                    f'  subzone {sz!r} has no zone_world_bounds entry; '
-                    f'positioning at (0,0,1,1) — fill it in to fix layout'))
-                zone.data['world'] = {'bounds': [0, 0, 1, 1]}
-            zone.save()
-            zone_by_slug[sz] = zone
-            self.stdout.write(
-                f'  subzone: {"created" if zcreated else "reusing"} {sz!r}')
-
-        # Validate room_zone_assignments now that we know which subzones exist.
-        for ptr, target in room_zone_assignments.items():
-            if target not in subzone_set:
-                raise CommandError(
-                    f'arrangement: room_zone_assignments[{ptr}] = {target!r} — '
-                    f'target subzone is not in arrangement.subzones')
-            if ptr not in room_zone_bounds:
-                # See build_bundle.validate_arrangement for the rationale.
-                raise CommandError(
-                    f'arrangement: room_zone_assignments[{ptr}] is set but '
-                    f'room_zone_bounds[{ptr}] is missing — a reassigned room '
-                    f'must declare its zone-local bounds')
+                f'  zone: {"created" if zcreated else "reusing"} '
+                f'{zslug!r}  {len(z["members"])} rooms  '
+                f'world=[{wx},{wy},{ww},{wh}]')
 
         # Rooms. key = "<world-slug>_<POINTER>.png" — maptroid's convention.
         n_created = 0
-        n_reassigned = 0
-        n_bounds_overridden = 0
         for rec in rooms:
             ptr = rec['pointer'].upper()
             key = f'{slug}_{ptr}.png'
-            target_slug = room_zone_assignments.get(ptr)
-            if target_slug is not None:
-                zone = zone_by_slug[target_slug]
-                n_reassigned += 1
-            else:
-                zone = zone_by_area[rec['area_idx']]
+            zone = member_zone_by_ptr.get(ptr)
+            if zone is None:
+                # Defensive: every bundle room should appear in exactly one
+                # zone (compose_zones guarantees this). Skip orphans loudly.
+                self.stdout.write(self.style.WARNING(
+                    f'  room {ptr} not in any bundle.zones[].members — skipping'))
+                continue
             try:
                 room = Room.objects.get(world=world, key=key)
             except Room.DoesNotExist:
@@ -253,13 +168,9 @@ class Command(BaseCommand):
             room.name = room.name or rec.get('area')  # don't clobber curated names
             data = room.data or {}
             # asmr-owned fields only — merge, preserving any maptroid-side keys.
+            zx, zy = member_xy_by_ptr[ptr]
             data.setdefault('zone', {})
-            if ptr in room_zone_bounds:
-                data['zone']['bounds'] = list(room_zone_bounds[ptr])
-                n_bounds_overridden += 1
-            else:
-                data['zone']['bounds'] = [rec['xy'][0], rec['xy'][1],
-                                          rec['width'], rec['height']]
+            data['zone']['bounds'] = [zx, zy, rec['width'], rec['height']]
             data['holes'] = rec.get('holes') or []
             data.setdefault('geometry', {})
             data['geometry']['inner'] = rec.get('geometries') or []
@@ -268,28 +179,25 @@ class Command(BaseCommand):
         self.stdout.write(
             f'  rooms: {n_created} created, '
             f'{len(rooms) - n_created} updated')
-        if n_reassigned or n_bounds_overridden:
-            self.stdout.write(
-                f'  arrangement applied: {n_reassigned} room reassignment(s), '
-                f'{n_bounds_overridden} room bound override(s)')
-
-        # Coordinates: zone.normalize() shifts rooms to zone-relative and
-        # sets each zone's w/h. Skip normalize for zones the arrangement
-        # positions explicitly — those bounds are authoritative.
-        for zslug, zone in zone_by_slug.items():
-            if zslug in overridden_zone_slugs:
-                continue
-            zone.normalize()
-        w, h = world.normalize()
-        self.stdout.write(f'  normalized — world is {w}x{h} cells')
 
         self._load_items(world, rooms)
 
     def _load_items(self, world, rooms):
         """Wipe-and-rewrite items for this world. The frontend's MapView
         bails (ready === false) when world_items.length is 0, so without
-        this the viewer would never mount for an asmr-loaded world."""
-        # Idempotent: blow away the previous import, then rewrite.
+        this the viewer would never mount for an asmr-loaded world.
+
+        `type`/`room_xy`/`plm_id`/`arg` are asmr-owned (from the bundle).
+        `modifier` (the chozo/in-block variant the ROM doesn't reliably
+        encode — see asmr's extract_plms docstring) is maptroid-side
+        curation, so we **preserve** any curated value across the
+        re-ingest instead of nulling it."""
+        # Snapshot curated modifiers before the wipe, keyed by (room, pos).
+        prior_modifier = {
+            (it.room_id, tuple(it.data.get('room_xy') or ())): it.data['modifier']
+            for it in Item.objects.filter(room__world=world)
+            if it.data.get('modifier')
+        }
         Item.objects.filter(room__world=world).delete()
         rooms_by_ptr = {r.key.removeprefix(world.slug + '_').removesuffix('.png'): r
                         for r in Room.objects.filter(world=world)}
@@ -300,14 +208,18 @@ class Command(BaseCommand):
             if room is None:
                 continue
             for it in rec.get('items', []):
-                Item.objects.create(
-                    room=room,
-                    zone=room.zone,
-                    data={
-                        'type': it['type'],
-                        'room_xy': it['room_xy'],
-                        'modifier': it.get('modifier'),
-                    },
-                )
+                xy = it['room_xy']
+                data = {'type': it['type'], 'room_xy': xy}
+                # asmr forensic fields — maptroid has no schema for them, but
+                # carrying them keeps the bundle's data from being dropped.
+                for k in ('plm_id', 'arg'):
+                    if k in it:
+                        data[k] = it[k]
+                # modifier: prefer a preserved curated value, then any the
+                # bundle supplies (currently none — deferred to curation).
+                modifier = prior_modifier.get((room.id, tuple(xy))) or it.get('modifier')
+                if modifier:
+                    data['modifier'] = modifier
+                Item.objects.create(room=room, zone=room.zone, data=data)
                 n += 1
         self.stdout.write(f'  items: {n} loaded')
