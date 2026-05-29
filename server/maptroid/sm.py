@@ -6,7 +6,16 @@ import os
 from PIL import Image, ImageDraw
 
 from maptroid.doors import draw_doors
-from maptroid.dzi import png_to_dzi
+# Deferred: maptroid.dzi imports `deepzoom`, which isn't installable from
+# the current PyPI; with --skip-dzi we never actually call png_to_dzi, so
+# don't take the import error at module-load time.
+try:
+    from maptroid.dzi import png_to_dzi
+except ModuleNotFoundError:  # pragma: no cover
+    def png_to_dzi(*args, **kwargs):
+        raise ModuleNotFoundError(
+            "deepzoom not installed — use --skip-dzi or install the real "
+            "github.com/openzoom/deepzoom.py.")
 from maptroid.icons import get_icons, MAP_OPERATIONS, get_template_icons
 from maptroid.utils import mkdir
 import unrest_image as img

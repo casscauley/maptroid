@@ -1,5 +1,6 @@
 beautifulsoup4==4.11.1
 colour==0.1.5
+DeepZoomTools @ git+https://github.com/openzoom/deepzoom.py.git@57d62ec36769996458af1351e102e22058bf6369
 Django==5.2.12
 django-mailer==2.2
 django-unrest-schema==0.0.3
