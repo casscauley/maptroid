@@ -205,6 +205,19 @@ class Command(BaseCommand):
             f'  rooms: {n_created} created, '
             f'{len(rooms) - n_created} updated')
 
+        # Prune zones the bundle no longer declares (extractor/24: a subzone
+        # deleted in the arrangement UI drops out of `subzones[]`, so
+        # compose_zones stops emitting it). Only empty zones are removed — a
+        # base area always has rooms and is always present, so it's safe.
+        bundle_slugs = {z['slug'] for z in zones}
+        stale = (Zone.objects.filter(world=world)
+                 .exclude(slug__in=bundle_slugs)
+                 .filter(room__isnull=True))
+        if stale.exists():
+            removed = sorted(stale.values_list('slug', flat=True))
+            stale.delete()
+            self.stdout.write(f'  zones: pruned {len(removed)} empty/removed: {removed}')
+
         self._load_items(world, rooms)
 
     def _load_items(self, world, rooms):
