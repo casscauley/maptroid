@@ -129,13 +129,21 @@ class Command(BaseCommand):
         member_xy_by_ptr = {}
         for z in zones:
             zslug = z['slug']
-            zname = (z['slug'].replace('-', ' ').title()
+            zname = z.get('name') or (z['slug'].replace('-', ' ').title()
                      if '__' not in z['slug'] else z['slug'])
             zone, zcreated = Zone.objects.get_or_create(
                 world=world, slug=zslug, defaults={'name': zname})
+            if z.get('name'):                 # rename override (extractor/29)
+                zone.name = z['name']
             wx, wy = z['world_xy']
             ww, wh = z['world_wh']
             zone.data['world'] = {'bounds': [wx, wy, ww, wh]}
+            # metadata overrides (extractor/29), loader-authoritative.
+            zone.data['hidden'] = bool(z.get('hidden'))
+            if z.get('color'):
+                zone.data['color'] = z['color']
+            else:
+                zone.data.pop('color', None)
             zone.save()
             zone_by_slug[zslug] = zone
             for m in z['members']:
@@ -165,13 +173,16 @@ class Command(BaseCommand):
                 room = Room(world=world, key=key)
                 n_created += 1
             room.zone = zone
-            room.name = room.name or rec.get('area')  # don't clobber curated names
+            # name: rename override (extractor/29) wins, else keep a curated
+            # name, else fall back to the area label.
+            room.name = rec.get('name') or room.name or rec.get('area')
             data = room.data or {}
             # asmr-owned fields only — merge, preserving any maptroid-side keys.
             zx, zy = member_xy_by_ptr[ptr]
             data.setdefault('zone', {})
             data['zone']['bounds'] = [zx, zy, rec['width'], rec['height']]
             data['holes'] = rec.get('holes') or []
+            data['hidden'] = bool(rec.get('hidden'))   # extractor/29, loader-authoritative
             data.setdefault('geometry', {})
             data['geometry']['inner'] = rec.get('geometries') or []
             room.data = data
