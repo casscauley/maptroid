@@ -183,6 +183,12 @@ class Command(BaseCommand):
             data['zone']['bounds'] = [zx, zy, rec['width'], rec['height']]
             data['holes'] = rec.get('holes') or []
             data['hidden'] = bool(rec.get('hidden'))   # extractor/29, loader-authoritative
+            # render flags (extractor/27), loader-authoritative. Defaults:
+            # invert_layers off, clear_holes on. asmr worlds don't set a
+            # world/zone clear_holes, so this per-room value governs in
+            # process_zone's `world or zone or room` hierarchy.
+            data['invert_layers'] = bool(rec.get('invert_layers'))
+            data['clear_holes'] = rec.get('clear_holes', True)
             data.setdefault('geometry', {})
             data['geometry']['inner'] = rec.get('geometries') or []
             # exterior boundary override (extractor/27): the bundle's
