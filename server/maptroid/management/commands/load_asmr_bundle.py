@@ -185,6 +185,14 @@ class Command(BaseCommand):
             data['hidden'] = bool(rec.get('hidden'))   # extractor/29, loader-authoritative
             data.setdefault('geometry', {})
             data['geometry']['inner'] = rec.get('geometries') or []
+            # exterior boundary override (extractor/27): the bundle's
+            # `geometry_override` is the room outline ring. maptroid's
+            # get_room_walls builds geometry.outer (the zone-coloured line)
+            # from it; absent = derive the outer from the room footprint.
+            if rec.get('geometry_override'):
+                data['geometry_override'] = rec['geometry_override']
+            else:
+                data.pop('geometry_override', None)
             room.data = data
             room.save()  # recomputes geometry.screens / geometry.outer
         self.stdout.write(
