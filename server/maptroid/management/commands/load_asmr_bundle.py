@@ -206,6 +206,12 @@ class Command(BaseCommand):
             # {"x,y": {color, text}} -> Room.data.links. LinkOverlay pairs
             # badges that share `text`.
             data['links'] = rec.get('links') or {}
+            # CRE block overlay (asmr extractor/30): breakable/shot/bomb blocks,
+            # spikes, conveyors, door-frame glyphs -> the "walls" view's stamped
+            # icons (make_walls_image). Deterministic, loader-authoritative.
+            data['cre'] = rec.get('cre') or {}
+            data['cre_overrides'] = rec.get('cre_overrides') or []
+            data['cre_hex'] = rec.get('cre_hex') or {}
             room.data = data
             room.save()  # recomputes geometry.screens / geometry.outer
         self.stdout.write(
