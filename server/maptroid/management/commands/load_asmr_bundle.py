@@ -21,8 +21,11 @@ What it deliberately does NOT do
   elevator-connection doors (see asmr extractor backlog item 20). Until
   that migration lands, writing doors would corrupt curated data — so
   this loader writes none. maptroid derives doors itself elsewhere.
-- Elevators. World-level; left to maptroid. (bundle has a top-level
-  `elevators` list — not consumed here, see item 20 open question.)
+- Elevators. The bundle's top-level `elevators` ({xys, variant} in the
+  baked world frame) ARE loaded into World.data.elevators (links+elevators
+  todo). Authored / ROM-seeded in the asmr arrangement world view.
+- Links. Per-room `links` ({"x,y": {color, text}}) -> Room.data.links,
+  loaded below; LinkOverlay pairs badges that share `text`.
 - Enemies. PLM enemies/sprites still deferred (asmr extractor item 06).
   Items (the 100 vanilla pickups) ARE loaded — see _load_items.
 - Image pyramids. The bundle ships no per-room PNGs, so there is
@@ -199,6 +202,10 @@ class Command(BaseCommand):
                 data['geometry_override'] = rec['geometry_override']
             else:
                 data.pop('geometry_override', None)
+            # link badges (links+elevators todo), loader-authoritative:
+            # {"x,y": {color, text}} -> Room.data.links. LinkOverlay pairs
+            # badges that share `text`.
+            data['links'] = rec.get('links') or {}
             room.data = data
             room.save()  # recomputes geometry.screens / geometry.outer
         self.stdout.write(
@@ -217,6 +224,14 @@ class Command(BaseCommand):
             removed = sorted(stale.values_list('slug', flat=True))
             stale.delete()
             self.stdout.write(f'  zones: pruned {len(removed)} empty/removed: {removed}')
+
+        # World-level elevators (links+elevators todo): {xys, variant} in the
+        # baked world frame -> World.data.elevators. ElevatorOverlay draws
+        # variant 'line' shafts. The bundle is pre-normalized (extractor/25),
+        # so World.normalize() won't re-shift the xys.
+        world.data['elevators'] = bundle.get('elevators') or []
+        world.save()
+        self.stdout.write(f'  elevators: {len(world.data["elevators"])}')
 
         self._load_items(world, rooms)
 
