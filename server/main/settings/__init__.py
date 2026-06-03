@@ -13,9 +13,9 @@ settings_files = [
 ]
 
 for s_file in settings_files:
-    f = "main/settings/{}.py".format(s_file)
+    f = os.path.join(pwd, f"{s_file}.py")
     try:
-        with open(os.path.abspath(f)) as file:
+        with open(f) as file:
             exec(compile(file.read(), f, "exec"), globals(), locals())
     except IOError:
         pass

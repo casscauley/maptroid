@@ -10,7 +10,7 @@ maptroid is the Django+Vue webapp at `maptroid.unrest.io` that hosts Super Metro
 
 ## Asset tree
 
-- `MEDIA_ROOT = server/../.media` → `~/projects/maptroid/.media/`
+- `MEDIA_ROOT = server/.media` → `~/projects/maptroid/server/.media/`
 - Per-world cache: `.media/sm_cache/<world_slug>/{layer-1,layer-2+layer-1,bts-extra}/<world_slug>_<header_hex>.png`
 - DeepZoom pyramids: `.media/sm_zone/<world_slug>/<zone>/...dzi`
 - `SINK_DIR = .media/_maptroid-sink/` — historical screenshot-based renders, used as the validation oracle by the sibling `~/projects/asmr` repo (it mirrors this dir locally).
