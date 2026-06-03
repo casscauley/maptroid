@@ -1,10 +1,27 @@
 """
 load_asmr_bundle — ingest an asmr extractor bundle into a maptroid world.
 
-The asmr repo (~/projects/asmr) emits `bundle/<world>.json`: the ROM's
-rooms reduced to maptroid's data shapes. This command is the "sink" that
-loads such a bundle into the database. It is the maptroid-side half of
-asmr's extractor track item 08 (world assembly + ingestion).
+The asmr repo (~/projects/asmr) is the ROM→pixels extractor. This command
+is the "sink" that loads its output into the database — the maptroid-side
+half of asmr's extractor track item 08 (world assembly + ingestion).
+
+Two input shapes, same loader
+-----------------------------
+- **base ⊕ overrides (current).** asmr's pipeline-schema-overhaul splits a
+  world into `bundle/<world>.base.json` (ROM-derived, no baked layout) and
+  `<world>.overrides.json` (sparse operator edits). This command reads both,
+  imports asmr's `tools/geo/bundle_schema`, and runs `normalize(merge(base,
+  overrides))` — the one-time re-min / world-shift + geometry finalization
+  that used to be baked into the bundle. Pass `--base <path>` (overrides is
+  auto-found alongside it). Normalization (and the merge/geometry logic) lives
+  in asmr and is guarded there by `verify_base_parity` — we import it rather
+  than copy it so the two can't drift.
+- **legacy single bundle.** The old `bundle/<world>.json` was already
+  normalized. Pass it as the positional arg and it loads as before.
+
+In both cases `_load` sees the identical normalized dict
+(`{world, elevators, rooms:[...], zones:[...]}`), so everything below the
+resolve step is shape-agnostic.
 
 What it does
 ------------
@@ -49,12 +66,16 @@ and not before backlog item 20 is resolved.
 
 Usage
 -----
+  # base ⊕ overrides (current): overrides auto-found next to base
+  ./manage.py load_asmr_bundle --base ../../asmr/bundle/vanilla.base.json
+  ./manage.py load_asmr_bundle --base ../../asmr/bundle/scm.base.json \\
+      --overrides ../../asmr/bundle/scm.overrides.json --dry-run
+  # legacy single normalized bundle
   ./manage.py load_asmr_bundle ../../asmr/bundle/vanilla.json
-  ./manage.py load_asmr_bundle path/to/bundle.json --world-slug vanilla \\
-      --world-name "Vanilla (asmr import)"
-  ./manage.py load_asmr_bundle path/to/bundle.json --dry-run
+  ./manage.py load_asmr_bundle path/to/bundle.json --world-slug vanilla --dry-run
 """
 import json
+import sys
 from pathlib import Path
 
 from django.core.management.base import BaseCommand, CommandError
@@ -64,11 +85,58 @@ from django.utils.text import slugify
 from maptroid.models import World, Zone, Room, Item
 
 
+def _resolve_base_overrides(base_path, overrides_path, asmr_geo):
+    """Read base ⊕ overrides and return the normalized legacy-shape bundle.
+
+    Imports asmr's `bundle_schema` (single source of truth for merge +
+    normalize + geometry finalization, guarded by `verify_base_parity` in
+    asmr) rather than reimplementing it here. `asmr_geo` overrides where that
+    module is found; default is `<asmr-repo>/tools/geo` derived from the base
+    file's location (`<asmr>/bundle/<world>.base.json`)."""
+    base_path = base_path.resolve()
+    geo = (asmr_geo or base_path.parent.parent / 'tools' / 'geo').resolve()
+    if not (geo / 'bundle_schema.py').exists():
+        raise CommandError(
+            f'asmr bundle_schema not found under {geo} — pass --asmr-geo '
+            'pointing at the asmr repo\'s tools/geo directory.')
+    if str(geo) not in sys.path:
+        sys.path.insert(0, str(geo))
+    try:
+        import bundle_schema  # noqa: E402  (asmr module, path-injected above)
+    except ImportError as exc:
+        raise CommandError(f'could not import asmr bundle_schema from {geo}: {exc}')
+
+    base = json.loads(base_path.read_text())
+    if overrides_path is None:
+        sib = base_path.with_name(base_path.name.replace('.base.json', '.overrides.json'))
+        overrides = json.loads(sib.read_text()) if sib.exists() else {}
+    else:
+        overrides = json.loads(overrides_path.read_text())
+
+    bundle = bundle_schema.normalize(bundle_schema.merge(base, overrides))
+    # normalize() drops provenance; carry it from base for the load banner.
+    for k in ('extractor_version', 'rom_sha256', 'generated', 'name'):
+        if base.get(k) is not None:
+            bundle.setdefault(k, base[k])
+    return bundle
+
+
 class Command(BaseCommand):
     help = 'Load an asmr extractor bundle (bundle/<world>.json) into a maptroid world.'
 
     def add_arguments(self, parser):
-        parser.add_argument('bundle', type=Path, help='Path to the asmr bundle JSON.')
+        parser.add_argument(
+            'bundle', type=Path, nargs='?', default=None,
+            help='Path to a legacy normalized bundle JSON (omit when using --base).')
+        parser.add_argument(
+            '--base', type=Path, default=None,
+            help='Path to <world>.base.json (current base ⊕ overrides input).')
+        parser.add_argument(
+            '--overrides', type=Path, default=None,
+            help='Path to <world>.overrides.json (default: sibling of --base).')
+        parser.add_argument(
+            '--asmr-geo', type=Path, default=None,
+            help="asmr repo's tools/geo dir (default: derived from --base path).")
         parser.add_argument(
             '--world-slug', default=None,
             help="World slug to load into (default: the bundle's `world` field).")
@@ -80,10 +148,22 @@ class Command(BaseCommand):
             help='Run inside a transaction and roll back — report only.')
 
     def handle(self, *args, **opts):
-        path = opts['bundle']
-        if not path.exists():
-            raise CommandError(f'bundle not found: {path}')
-        bundle = json.loads(path.read_text())
+        base, legacy = opts['base'], opts['bundle']
+        if bool(base) == bool(legacy):
+            raise CommandError('pass exactly one of: positional <bundle> (legacy) '
+                               'or --base <world>.base.json (base ⊕ overrides).')
+        if base is not None:
+            if not base.exists():
+                raise CommandError(f'base not found: {base}')
+            if opts['overrides'] is not None and not opts['overrides'].exists():
+                raise CommandError(f'overrides not found: {opts["overrides"]}')
+            bundle = _resolve_base_overrides(base, opts['overrides'], opts['asmr_geo'])
+            src = base
+        else:
+            if not legacy.exists():
+                raise CommandError(f'bundle not found: {legacy}')
+            bundle = json.loads(legacy.read_text())
+            src = legacy
 
         slug = opts['world_slug'] or slugify(bundle['world'])
         name = opts['world_name'] or f'{bundle["world"]} (asmr import)'
@@ -91,7 +171,7 @@ class Command(BaseCommand):
         zones = bundle.get('zones') or []
 
         self.stdout.write(
-            f'bundle: {path}  world={bundle.get("world")!r}  '
+            f'bundle: {src}  world={bundle.get("world")!r}  '
             f'rooms={len(rooms)}  zones={len(zones)}  '
             f'extractor={bundle.get("extractor_version")}')
         if slug == 'super-metroid':
@@ -125,6 +205,14 @@ class Command(BaseCommand):
 
         rooms_by_ptr = {r['pointer'].upper(): r for r in rooms}
 
+        # Hidden rooms (extractor/29) are dropped from the world map at ingest:
+        # excluded from zone membership, never created, and any existing copy
+        # is deleted below (which lets its zone fall to the empty-zone prune).
+        # The bundle still carries them as zone members so the arrangement UI's
+        # hidden view can list them — maptroid simply never renders them.
+        visible_rooms = [r for r in rooms if not r.get('hidden')]
+        hidden_ptrs = {r['pointer'].upper() for r in rooms if r.get('hidden')}
+
         # One Zone per bundle zones[] entry. Bundle is pre-normalized
         # (extractor/25) — world bounds and member zone_xy are authoritative.
         zone_by_slug = {}
@@ -149,18 +237,22 @@ class Command(BaseCommand):
                 zone.data.pop('color', None)
             zone.save()
             zone_by_slug[zslug] = zone
+            n_members = 0
             for m in z['members']:
                 ptr = m['pointer'].upper()
+                if ptr in hidden_ptrs:        # hidden room — not a map member
+                    continue
                 member_zone_by_ptr[ptr] = zone
                 member_xy_by_ptr[ptr] = list(m['zone_xy'])
+                n_members += 1
             self.stdout.write(
                 f'  zone: {"created" if zcreated else "reusing"} '
-                f'{zslug!r}  {len(z["members"])} rooms  '
+                f'{zslug!r}  {n_members} rooms  '
                 f'world=[{wx},{wy},{ww},{wh}]')
 
         # Rooms. key = "<world-slug>_<POINTER>.png" — maptroid's convention.
         n_created = 0
-        for rec in rooms:
+        for rec in visible_rooms:
             ptr = rec['pointer'].upper()
             key = f'{slug}_{ptr}.png'
             zone = member_zone_by_ptr.get(ptr)
@@ -216,7 +308,19 @@ class Command(BaseCommand):
             room.save()  # recomputes geometry.screens / geometry.outer
         self.stdout.write(
             f'  rooms: {n_created} created, '
-            f'{len(rooms) - n_created} updated')
+            f'{len(visible_rooms) - n_created} updated')
+
+        # Delete rooms the visible bundle no longer declares — rooms removed
+        # from the crawl AND (extractor/29) rooms now hidden. Items cascade.
+        # This empties any zone that held only hidden/removed rooms, so the
+        # prune below can drop it (e.g. a retired ztrash zone's rooms have all
+        # moved back to their area zones, leaving it empty).
+        visible_keys = {f'{slug}_{r["pointer"].upper()}.png' for r in visible_rooms}
+        orphans = Room.objects.filter(world=world).exclude(key__in=visible_keys)
+        n_orphan = orphans.count()
+        if n_orphan:
+            orphans.delete()
+            self.stdout.write(f'  rooms: deleted {n_orphan} hidden/removed')
 
         # Prune zones the bundle no longer declares (extractor/24: a subzone
         # deleted in the arrangement UI drops out of `subzones[]`, so
@@ -239,7 +343,7 @@ class Command(BaseCommand):
         world.save()
         self.stdout.write(f'  elevators: {len(world.data["elevators"])}')
 
-        self._load_items(world, rooms)
+        self._load_items(world, visible_rooms)
 
     def _load_items(self, world, rooms):
         """Wipe-and-rewrite items for this world. The frontend's MapView

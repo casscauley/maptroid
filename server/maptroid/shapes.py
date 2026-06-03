@@ -23,8 +23,19 @@ def get_screens(room):
     return screens
 
 def get_room_walls(room):
-    if room.data.get('geometry_override'):
-        polygons = [Polygon(room.data.get('geometry_override'))]
+    override = room.data.get('geometry_override')
+    if override:
+        # asmr emits geometry_override in two shapes (asmr extractor/27):
+        #   - exterior ring: a single boundary [[x, y], ...]
+        #   - full replace : [{exterior, interiors}, ...] — the precise interior
+        #     polygons (legacy hand-authored geometry). Build the wall outline
+        #     from those polygons (with their holes) rather than treating the
+        #     list of dicts as a coordinate ring.
+        if isinstance(override[0], dict):
+            polygons = [Polygon(g['exterior'], g.get('interiors') or [])
+                        for g in override]
+        else:
+            polygons = [Polygon(override)]
     else:
         polygons = [_square(x, y) for x, y in get_screens(room)]
     return polygons_to_geometry(polygons)
