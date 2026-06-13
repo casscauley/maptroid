@@ -45,9 +45,13 @@ What it deliberately does NOT do
   loaded below; LinkOverlay pairs badges that share `text`.
 - Enemies. PLM enemies/sprites still deferred (asmr extractor item 06).
   Items (the 100 vanilla pickups) ARE loaded — see _load_items.
-- Image pyramids. The bundle ships no per-room PNGs, so there is
-  nothing to tile. Pyramid generation stays with maptroid's existing
-  `scripts/2-process_sm.py` / `process_zone` path.
+- Image pyramids. This loader is records-only and ships no pixels. As of
+  2026-06-13 (asmr extractor/66), zone compositing + DZI pyramid generation
+  moved to asmr (`tools/geo/composite_zones.py` + `dzi.py`, `pyvips dzsave`):
+  asmr writes the `sm_cache/` + `sm_zone/<…>.dzi` tree directly for
+  asmr-sourced worlds. maptroid's `process_zone` is redundant for those worlds
+  (it stays for legacy SMILE/Dread). Either way it's a separate render step,
+  not this loader.
 
 Normalization
 -------------
