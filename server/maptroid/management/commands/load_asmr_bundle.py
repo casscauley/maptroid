@@ -118,10 +118,16 @@ def _resolve_base_overrides(base_path, overrides_path, asmr_geo):
         overrides = json.loads(overrides_path.read_text())
 
     bundle = bundle_schema.normalize(bundle_schema.merge(base, overrides))
-    # normalize() drops provenance; carry it from base for the load banner.
+    # normalize() drops provenance; carry it for the load banner. As of asmr
+    # extractor/68 provenance lives in a sibling `<world>.meta.json` (base.json
+    # is content-only); read it there, falling back to any inline value on a
+    # pre-split base.json so older bundles still banner correctly.
+    meta_sib = base_path.with_name(base_path.name.replace('.base.json', '.meta.json'))
+    meta = json.loads(meta_sib.read_text()) if meta_sib.exists() else {}
     for k in ('extractor_version', 'rom_sha256', 'generated', 'name'):
-        if base.get(k) is not None:
-            bundle.setdefault(k, base[k])
+        v = meta.get(k) if meta.get(k) is not None else base.get(k)
+        if v is not None:
+            bundle.setdefault(k, v)
     return bundle
 
 
