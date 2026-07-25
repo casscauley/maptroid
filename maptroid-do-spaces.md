@@ -27,10 +27,10 @@ path — so the render pipeline appears to work and the images 404.
 | Path | Size | Written by | Disposition |
 | --- | --- | --- | --- |
 | `sm_zone/` | 12G | `sm.py` — raw fs | **Track 3** — needs code changes |
-| `sm_cache/` | 11G | `sm.py`, `plm.py` — raw fs | **Track 2** — it is a cache; delete |
-| `trash/` | 4.2G | scratch | **Track 2** — delete |
+| `sm_cache/` | 11G | `sm.py`, `plm.py` — raw fs | **Track 3 — NOT deletable, see below** |
+| `trash/` | 0 | debug artifacts, write-only | ~~4.2G~~ **deleted 2026-07-25** |
 | `_maptroid-sink/` | 2.5G | **symlink to a git repo** | **Do not touch** — see below |
-| `temp/` | 1.6G | scratch | **Track 2** — delete |
+| `temp/` | — | scratch, 0 code refs | ~~1.6G~~ **deleted 2026-07-25** |
 | `screenshots/` | 1.2G | `ImageField(upload_to="screenshots")` | **Track 1** — Spaces |
 | `dread_zones/` | 511M | unverified | **Unknown** — resolve before acting |
 | `labbooks/` | 445M | `labbook.py` — raw fs | Track 3 (small) |
@@ -53,17 +53,33 @@ and break all three. Leave it exactly as it is.
 
 ## Three tracks, in order of value-per-risk
 
-### Track 2 first — delete, don't migrate (≈17G, no code)
+### Track 2 — done, and smaller than it looked (5.8G reclaimed)
 
-The largest win needs no Django changes at all. `sm_cache` is a cache, and
-`trash`/`temp` are scratch by name. txrx's playbook set the precedent: it
-explicitly did **not** ship `.media/cache/` (216M of sorl thumbnails) because it
-"regenerated on demand".
+**Deleted 2026-07-25:** `temp/` (1.6G, zero code references, newest file
+2021-11-17) and the contents of `trash/` (4.2G, newest file 2022-08-22). `trash`
+has 22 code references but every one is a **write** — debug artifacts like
+`cv2.imwrite('.media/trash/az.png', ...)`. Nothing reads them and nothing serves
+them. The empty `trash/` directory is deliberately kept: `cv2.imwrite` and bare
+`open()` do not create parent directories, so a debug write would silently fail
+against a missing one. Free space went 9.0G → 15G.
 
-Blocking question: **is `sm_cache` genuinely regenerable, and how long does a
-rebuild take?** If regenerating 11G takes hours of CPU on a 3.8 GiB box, "it is a
-cache" is technically true and operationally useless. Verify against one world
-slug before deleting the lot.
+**`sm_cache` is NOT deletable, despite the name.** An earlier draft of this spec
+filed it here on the strength of the word "cache". That was wrong. It is served
+directly to browsers and is the map viewer's actual image source:
+
+```js
+// client/src/game/RoomController.js:262
+this.img.src = `/media/sm_cache/${slug}/layer-1/${this.json.key}`
+```
+
+Five call sites across `RoomController.js`, `PlmAlign.vue`, `RoomBox.vue` and
+`EditRoom.vue` fetch it. There is no regenerate-on-miss path — `img.src` simply
+404s. Deleting it takes every room image off the live game until a full
+re-render. It belongs in Track 3 with `sm_zone`, as content to migrate rather
+than discard.
+
+The lesson generalises: on this project, directory names describe how data was
+produced, not whether it is disposable.
 
 ### Track 1 — the txrx pattern, verbatim (≈1.3G, low risk)
 
