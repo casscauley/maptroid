@@ -16,3 +16,7 @@ _backups
 _cache
 
 server/smur/natureRando
+# uwsgi request log — generated, rotated by /etc/logrotate.d/uwsgi-projects.
+# logs/.gitkeep is tracked so the directory exists in a fresh clone (the systemd
+# unit also mkdir -p's it, but a checkout should look right before first start).
+logs/*.log
