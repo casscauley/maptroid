@@ -20,3 +20,8 @@ server/smur/natureRando
 # logs/.gitkeep is tracked so the directory exists in a fresh clone (the systemd
 # unit also mkdir -p's it, but a checkout should look right before first start).
 logs/*.log
+
+# Secrets, loaded into os.environ by server/main/settings/__init__.py.
+# Was untracked but NOT ignored, so a `git add .` would have committed the
+# DigitalOcean Spaces credentials.
+.env

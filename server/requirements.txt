@@ -15,3 +15,5 @@ social-auth-core==4.2.0
 typer==0.6.1
 urcv==0.0.5
 uwsgi==2.0.31
+django-storages==1.14.6
+boto3==1.43.56
