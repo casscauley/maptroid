@@ -81,9 +81,25 @@ than discard.
 The lesson generalises: on this project, directory names describe how data was
 produced, not whether it is disposable.
 
-### Track 1 — the txrx pattern, verbatim (≈1.3G, low risk)
+### Track 1 — DONE 2026-07-25 (commit `16fa376`)
 
-Proven, and mostly copy-paste from `txrx.org/main/settings/spaces.py`:
+**1,197 MB across 16,574 files now at `s3://skade/maptroid/`, served from the
+CDN.** All eight `upload_to` directories uploaded and verified reachable
+*before* `STORAGES` was flipped; a DB row's `.url` resolves to
+`skade.nyc3.cdn.digitaloceanspaces.com/maptroid/screenshots/…` and returns 200,
+and `sm_cache` still serves locally as it must.
+
+What shipped: a repo-root `.env` loader in `settings/__init__.py` (deriving its
+path from `__file__`, unlike the exec loop below it which depends on CWD),
+`settings/spaces.py` registered after `local`, and `django-storages==1.14.6` +
+`boto3==1.43.56` pinned. `.env` was untracked but **not** gitignored — that is
+fixed; a `git add .` would have committed the credentials.
+
+`MEDIA_ROOT` is deliberately unchanged, and nginx's `/media/` alias must stay:
+the direct-write half below still depends on both.
+
+Original plan, for reference — mostly copy-paste from
+`txrx.org/main/settings/spaces.py`:
 
 1. `requirements.txt`: add `django-storages[boto3]` and `boto3` (maptroid has
    neither; txrx has both).
