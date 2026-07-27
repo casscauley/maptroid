@@ -1,9 +1,9 @@
 # systemd unit for maptroid.unrest.io. Canonical copy lives here; /etc/systemd/system/ holds a
 # copy, not a symlink, so systemd can read it before /home is guaranteed mounted.
-#   sudo cp /home/django/projects/maptroid/deploy/maptroid.service /etc/systemd/system/
+#   sudo cp /home/clepsy/projects/maptroid/deploy/maptroid.service /etc/systemd/system/
 #   sudo systemctl daemon-reload && sudo systemctl restart maptroid
 #
-# Reload workers without a restart:  touch /home/django/projects/maptroid/server/uwsgi.ini   (or systemctl reload)
+# Reload workers without a restart:  touch /home/clepsy/projects/maptroid/server/uwsgi.ini   (or systemctl reload)
 
 [Unit]
 Description=maptroid.unrest.io uwsgi
@@ -12,11 +12,11 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=django
-Group=django
-WorkingDirectory=/home/django/projects/maptroid/server
-ExecStartPre=/bin/mkdir -p /home/django/projects/maptroid/logs
-ExecStart=/home/django/projects/maptroid/server/.venv/bin/uwsgi --ini /home/django/projects/maptroid/server/uwsgi.ini
+User=clepsy
+Group=clepsy
+WorkingDirectory=/home/clepsy/projects/maptroid/server
+ExecStartPre=/bin/mkdir -p /home/clepsy/projects/maptroid/logs
+ExecStart=/home/clepsy/projects/maptroid/server/.venv/bin/uwsgi --ini /home/clepsy/projects/maptroid/server/uwsgi.ini
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=5s
@@ -27,7 +27,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
 ProtectHome=read-only
-ReadWritePaths=/home/django/projects/maptroid
+ReadWritePaths=/home/clepsy/projects/maptroid
 ProtectKernelTunables=true
 ProtectControlGroups=true
 RestrictSUIDSGID=true
